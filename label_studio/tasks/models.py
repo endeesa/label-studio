@@ -24,7 +24,8 @@ from django.core.files.storage import default_storage
 from rest_framework.exceptions import ValidationError
 
 from core.feature_flags import flag_set
-from core.utils.common import find_first_one_to_one_related_field_by_prefix, string_is_url, load_func
+from core.utils.common import find_first_one_to_one_related_field_by_prefix, string_is_url, load_func, \
+    temporary_disconnect_list_signal
 from core.utils.params import get_env
 from core.label_config import SINGLE_VALUED_TAGS
 from core.current_request import get_current_request
@@ -278,6 +279,20 @@ class Task(TaskMixin, models.Model):
                 self.inner_id = None if max_inner_id is None else (max_inner_id + 1)
         super().save(*args, **kwargs)
 
+    @staticmethod
+    def delete_tasks_without_signals(queryset):
+        """
+        Delete Tasks queryset with switched off signals
+        :param queryset: Tasks queryset
+        """
+        signals = [
+            (post_delete, update_is_labeled_after_removing_annotation, Annotation),
+            (post_delete, update_all_task_states_after_deleting_task, Task),
+            (pre_delete, remove_data_columns, Task),
+            (post_delete, remove_project_summary_annotations, Annotation)
+        ]
+        with temporary_disconnect_list_signal(signals):
+            queryset.delete()
 
 pre_bulk_create = Signal(providing_args=["objs", "batch_size"])
 post_bulk_create = Signal(providing_args=["objs", "batch_size"])
@@ -621,17 +636,21 @@ def update_project_summary_annotations_and_is_labeled(sender, instance, created,
             instance.task.total_annotations = instance.task.annotations.all().filter(was_cancelled=False).count()
         instance.task.update_is_labeled()
         instance.task.save(update_fields=['is_labeled', 'total_annotations', 'cancelled_annotations'])
+        logger.debug(f"Updated total_annotations and cancelled_annotations for {instance.task.id}.")
 
 
-@receiver(pre_delete, sender=Annotation)
+@receiver(post_delete, sender=Annotation)
 def remove_project_summary_annotations(sender, instance, **kwargs):
     """Remove annotation counters in project summary followed by deleting an annotation"""
     instance.decrease_project_summary_counters()
     if instance.was_cancelled:
-        instance.task.cancelled_annotations = instance.task.annotations.all().filter(was_cancelled=True).count() - 1
+        Task.objects.filter(id=instance.task.id).update(
+            cancelled_annotations=instance.task.annotations.all().filter(was_cancelled=True).count())
+        logger.debug(f"Updated cancelled_annotations for {instance.task.id}.")
     else:
-        instance.task.total_annotations = instance.task.annotations.all().filter(was_cancelled=False).count() - 1
-    instance.task.save(update_fields=['total_annotations', 'cancelled_annotations'])
+        Task.objects.filter(id=instance.task.id).update(
+            total_annotations=instance.task.annotations.all().filter(was_cancelled=False).count())
+        logger.debug(f"Updated total_annotations for {instance.task.id}.")
 
 
 @receiver(pre_delete, sender=Prediction)
@@ -639,12 +658,15 @@ def remove_predictions_from_project(sender, instance, **kwargs):
     """Remove predictions counters"""
     instance.task.total_predictions = instance.task.predictions.all().count() - 1
     instance.task.save(update_fields=['total_predictions'])
+    logger.debug(f"Updated total_predictions for {instance.task.id}.")
+
 
 @receiver(post_save, sender=Prediction)
 def save_predictions_to_project(sender, instance, **kwargs):
     """Add predictions counters"""
     instance.task.total_predictions = instance.task.predictions.all().count()
     instance.task.save(update_fields=['total_predictions'])
+    logger.debug(f"Updated total_predictions for {instance.task.id}.")
 
 
 # =========== END OF PROJECT SUMMARY UPDATES ===========
