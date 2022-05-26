@@ -22,10 +22,10 @@ services:
         type: volume
         volume:
           nocopy: true
-      - ./mydata:/label-studio/data:rw
-      - ./deploy/nginx/${NGINX_FILE:-default.conf}:/etc/nginx/templates/${NGINX_FILE:-default.conf}.template
-      - ./deploy/nginx/scripts:/docker-entrypoint.d/label-studio
-      - ./deploy/nginx/certs:/certs:ro
+      - ${WEBAPP_STORAGE_HOME}/mydata:/label-studio/data:rw
+      - ${WEBAPP_STORAGE_HOME}/deploy/nginx/${NGINX_FILE:-default.conf}:/etc/nginx/templates/${NGINX_FILE:-default.conf}.template
+      - ${WEBAPP_STORAGE_HOME}/deploy/nginx/scripts:/docker-entrypoint.d/label-studio
+      - ${WEBAPP_STORAGE_HOME}/deploy/nginx/certs:/certs:ro
     command: nginx -g "daemon off;"
 
   app:
@@ -47,7 +47,7 @@ services:
       - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:-}
       - LABEL_STUDIO_COPY_STATIC_DATA=true
     volumes:
-      - ./mydata:/label-studio/data:rw
+      - ${WEBAPP_STORAGE_HOME}/mydata:/label-studio/data:rw
       # keep in sync with deploy/docker-entrypoint.d/30-copy-static-data.sh
       - source: static
         target: /label-studio/static_volume
@@ -69,8 +69,8 @@ services:
     environment:
       - POSTGRES_HOST_AUTH_METHOD=trust
     volumes:
-      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql/data
-      - ./deploy/pgsql/certs:/var/lib/postgresql/certs:ro
+      - ${WEBAPP_STORAGE_HOME}/${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql/data
+      - ${WEBAPP_STORAGE_HOME}/deploy/pgsql/certs:/var/lib/postgresql/certs:ro
 
 volumes:
   static: {}
